@@ -157,14 +157,16 @@ def main(_argv):
         class_names = utils.read_class_names(cfg.YOLO.CLASSES)
 
         # by default allow all classes in .names file
-        allowed_classes = list(class_names.values())
+        # allowed_classes = list(class_names.values())
         
         # custom allowed classes (uncomment line below to customize tracker for only people)
         #allowed_classes = ['person']
+        allowed_classes = ['car', 'bus', 'truck']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
         deleted_indx = []
+        count_classes = [0, 0, 0] # 0: car, 1: bus, 2: truck
         for i in range(num_objects):
             class_indx = int(classes[i])
             class_name = class_names[class_indx]
@@ -172,11 +174,17 @@ def main(_argv):
                 deleted_indx.append(i)
             else:
                 names.append(class_name)
+                if class_name=='car':
+                    count_classes[0] = count_classes[0] + 1
+                elif class_name=='bus':
+                    count_classes[1] = count_classes[1] + 1
+                elif class_name=='truck':
+                    count_classes[2] = count_classes[2] + 1
         names = np.array(names)
         count = len(names)
         if FLAGS.count:
-            cv2.putText(frame, "Objects being tracked: {}".format(count), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
-            print("Objects being tracked: {}".format(count))
+            cv2.putText(frame, "Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,count_classes[0],count_classes[1],count_classes[2]), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            print("Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,count_classes[0],count_classes[1],count_classes[2]))
         # delete detections that are not in allowed_classes
         bboxes = np.delete(bboxes, deleted_indx, axis=0)
         scores = np.delete(scores, deleted_indx, axis=0)
