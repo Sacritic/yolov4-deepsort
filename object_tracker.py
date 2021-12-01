@@ -183,8 +183,8 @@ def main(_argv):
         names = np.array(names)
         count = len(names)
         if FLAGS.count:
-            cv2.putText(frame, "Objects being tracked: {}".format(count), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (255, 0, 0), 2)
-            cv2.putText(frame, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(count_classes[0],count_classes[1],count_classes[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (255, 0, 0), 2)
+            cv2.putText(frame, "Objects being tracked: {}".format(count), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 255), 2)
+            cv2.putText(frame, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(count_classes[0],count_classes[1],count_classes[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 255), 2)
             print("Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,count_classes[0],count_classes[1],count_classes[2]))
         # delete detections that are not in allowed_classes
         bboxes = np.delete(bboxes, deleted_indx, axis=0)
