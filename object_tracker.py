@@ -235,16 +235,16 @@ def main(_argv):
         ct_all = len(track_id)
         overlay = frame.copy()
         # text backbround
-        cv2.rectangle(overlay, (0, 0), (550, 50), (0,0,0), -1)
+        cv2.rectangle(overlay, (0, 0), (500, 50), (0,0,0), -1)
         cv2.rectangle(overlay, (1000, 0), (original_w, 50), (0,0,0), -1)
         
         if FLAGS.count:
-            cv2.putText(overlay, "Objects tracked: {}".format(ct_all), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            cv2.putText(overlay, "Overall traffic: {}".format(ct_all), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
             cv2.putText(overlay, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(ct_num[0],ct_num[1],ct_num[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
             # apply the overlay
             alpha = 0.7
             cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-            print("Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(ct_all,ct_num[0],ct_num[1],ct_num[2]))
+            print("Objects being tracked: {}, Overall traffic: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,ct_all,ct_num[0],ct_num[1],ct_num[2]))
         
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
