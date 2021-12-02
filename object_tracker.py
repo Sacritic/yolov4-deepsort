@@ -91,6 +91,9 @@ def main(_argv):
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     frame_num = 0
+    ct_num = [0, 0, 0] # 0: car 1: bus 2: truck
+    ct_all = 0
+    track_id = []
     # while video is running
     while True:
         return_value, frame = vid.read()
@@ -166,7 +169,6 @@ def main(_argv):
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
         deleted_indx = []
-        count_classes = [0, 0, 0] # 0: car, 1: bus, 2: truck
         for i in range(num_objects):
             class_indx = int(classes[i])
             class_name = class_names[class_indx]
@@ -174,27 +176,10 @@ def main(_argv):
                 deleted_indx.append(i)
             else:
                 names.append(class_name)
-                if class_name=='car':
-                    count_classes[0] = count_classes[0] + 1
-                elif class_name=='bus':
-                    count_classes[1] = count_classes[1] + 1
-                elif class_name=='truck':
-                    count_classes[2] = count_classes[2] + 1
+
         names = np.array(names)
         count = len(names)
         
-        overlay = frame.copy()
-        # text backbround
-        cv2.rectangle(overlay, (0, 0), (650, 50), (0,0,0), -1)
-        cv2.rectangle(overlay, (1045, 0), (original_w, 50), (0,0,0), -1)
-        
-        if FLAGS.count:
-            cv2.putText(overlay, "Objects being tracked: {}".format(count), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
-            cv2.putText(overlay, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(count_classes[0],count_classes[1],count_classes[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
-            # apply the overlay
-            alpha = 0.7
-            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-            print("Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,count_classes[0],count_classes[1],count_classes[2]))
         # delete detections that are not in allowed_classes
         bboxes = np.delete(bboxes, deleted_indx, axis=0)
         scores = np.delete(scores, deleted_indx, axis=0)
@@ -225,6 +210,16 @@ def main(_argv):
             bbox = track.to_tlbr()
             class_name = track.get_class()
             
+        # check count
+            if track.track_id not in track_id:
+                if class_name == 'car':
+                    ct_num[0] = ct_num[0] + 1
+                elif class_name == 'bus':
+                    ct_num[1] = ct_num[1] + 1
+                elif class_name == 'truck':
+                    ct_num[2] = ct_num[2] + 1
+                track_id.append(track.track_id)
+            
         # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
@@ -235,7 +230,22 @@ def main(_argv):
         # if enable info flag then print details about each track
             if FLAGS.info:
                 print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
-
+        
+        # show traffic on screen
+        ct_all = len(track_id)
+        overlay = frame.copy()
+        # text backbround
+        cv2.rectangle(overlay, (0, 0), (550, 50), (0,0,0), -1)
+        cv2.rectangle(overlay, (1000, 0), (original_w, 50), (0,0,0), -1)
+        
+        if FLAGS.count:
+            cv2.putText(overlay, "Objects tracked: {}".format(ct_all), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            cv2.putText(overlay, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(ct_num[0],ct_num[1],ct_num[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            # apply the overlay
+            alpha = 0.7
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+            print("Objects being tracked: {}, Car #: {}, Bus #: {}, Truck #: {}".format(ct_all,ct_num[0],ct_num[1],ct_num[2]))
+        
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
         print("FPS: %.2f" % fps)
