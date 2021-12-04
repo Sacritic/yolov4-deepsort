@@ -38,6 +38,7 @@ flags.DEFINE_float('score', 0.50, 'score threshold')
 flags.DEFINE_boolean('dont_show', False, 'dont show video output')
 flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
 flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
+flags.DEFINE_boolean('lane', False, 'detect lanes')
 
 def main(_argv):
     # Definition of the parameters
@@ -201,8 +202,9 @@ def main(_argv):
         detections = [detections[i] for i in indices]       
 
         # draw lanes
-        lline, rline = lt.detect_lanes_img(frame)
-        frame = lt.draw_fitline(frame, lline, rline)
+        if FLAGS.lane:
+            lline, rline = lt.detect_lanes_img(frame)
+            frame = lt.draw_fitline(frame, lline, rline)
         
         # Call the tracker
         tracker.predict()
