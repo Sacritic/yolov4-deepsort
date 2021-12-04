@@ -209,7 +209,6 @@ def main(_argv):
         # draw lanes
         if FLAGS.lane and frame_num < 5:
             lline, rline = lt.detect_lanes_img(frame)
-            frame = lt.draw_fitline(frame, lline, rline)
                 
             if lline[0]-lline[2]==0:
                 lx=lline[0]-lline[2]+1e-4
@@ -336,6 +335,7 @@ def main(_argv):
             # apply the overlay
             alpha = 0.7
             cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+            frame = lt.draw_fitline(frame, lline, rline)
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
