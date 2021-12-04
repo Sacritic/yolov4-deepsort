@@ -280,14 +280,14 @@ def detect_lanes_img(img):
 
     # Apply Canny edge transform
     canny_img = canny(blur_img, 70, 100)
-    cv2.imshow('canny_img1', canny_img)
+    # cv2.imshow('canny_img1', canny_img)
     # to except contours of ROI image
     vertices = np.array(
         [[(width / 2 - 230, height), (width / 2 - 180, 150), (width / 2, 150), (width / 2 + 150, height)]],
         dtype=np.int32)
     canny_img = region_of_interest(canny_img, vertices)
     
-    cv2.imshow('canny_img2', canny_img)
+    # cv2.imshow('canny_img2', canny_img)
 
     # Perform hough transform
     # Get first candidates for real lane lines
