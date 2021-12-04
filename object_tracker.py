@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
+import lane_test as lt
 # deep sort imports
 from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
@@ -199,6 +200,10 @@ def main(_argv):
         indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
         detections = [detections[i] for i in indices]       
 
+        # draw lanes
+        lline, rline = lt.detect_lanes_img(frame)
+        frame = lt.draw_fitline(frame, lline, rline)
+        
         # Call the tracker
         tracker.predict()
         tracker.update(detections)
