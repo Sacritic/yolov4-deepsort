@@ -1,371 +1,359 @@
-# This Python file uses the following encoding: utf-8
-# -*- coding: cp949 -*-
-# -*- coding: utf-8 -*-
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import numpy as np
+import os
+# comment out below line to enable tensorflow logging outputs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import time
+import tensorflow as tf
+physical_devices = tf.config.experimental.list_physical_devices('GPU')
+if len(physical_devices) > 0:
+    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+from absl import app, flags, logging
+from absl.flags import FLAGS
+import core.utils as utils
+from core.yolov4 import filter_boxes
+from tensorflow.python.saved_model import tag_constants
+from core.config import cfg
+from PIL import Image
 import cv2
-import random
-import os, sys
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.compat.v1 import ConfigProto
+from tensorflow.compat.v1 import InteractiveSession
+import lane_test as lt
+# deep sort imports
+from deep_sort import preprocessing, nn_matching
+from deep_sort.detection import Detection
+from deep_sort.tracker import Tracker
+from tools import generate_detections as gdet
+flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
+flags.DEFINE_string('weights', './checkpoints/yolov4-416',
+                    'path to weights file')
+flags.DEFINE_integer('size', 416, 'resize images to')
+flags.DEFINE_boolean('tiny', False, 'yolo or yolo-tiny')
+flags.DEFINE_string('model', 'yolov4', 'yolov3 or yolov4')
+flags.DEFINE_string('video', './data/video/test.mp4', 'path to input video or set to 0 for webcam')
+flags.DEFINE_string('output', None, 'path to output video')
+flags.DEFINE_string('output_format', 'XVID', 'codec used in VideoWriter when saving video to file')
+flags.DEFINE_float('iou', 0.45, 'iou threshold')
+flags.DEFINE_float('score', 0.50, 'score threshold')
+flags.DEFINE_boolean('dont_show', False, 'dont show video output')
+flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
+flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
+flags.DEFINE_boolean('lane', False, 'detect lanes')
 
-# input_type = 'video' #'video' # 'image'
+def main(_argv):
+    # Definition of the parameters
+    max_cosine_distance = 0.4
+    nn_budget = None
+    nms_max_overlap = 1.0
+    
+    # initialize deep sort
+    model_filename = 'model_data/mars-small128.pb'
+    encoder = gdet.create_box_encoder(model_filename, batch_size=1)
+    # calculate cosine distance metric
+    metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
+    # initialize tracker
+    tracker = Tracker(metric)
 
-# cap = cv2.VideoCapture('solidWhiteRight.mp4')
-# cap = cv2.VideoCapture('solidYellowLeft.mp4')
-# cap = cv2.VideoCapture('challenge.mp4')
-# cap = cv2.VideoCapture('bridge.mp4')
-fit_result, l_fit_result, r_fit_result, L_lane, R_lane = [], [], [], [], []
+    # load configuration for object detector
+    config = ConfigProto()
+    config.gpu_options.allow_growth = True
+    session = InteractiveSession(config=config)
+    STRIDES, ANCHORS, NUM_CLASS, XYSCALE = utils.load_config(FLAGS)
+    input_size = FLAGS.size
+    video_path = FLAGS.video
 
-
-# Define the codec and create VideoWriter object
-# fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Be sure to use the lower case
-# out = cv2.VideoWriter('output.mp4', fourcc, 20.0, ( 960, 540 ))
-
-def grayscale(img):
-    """Applies the Grayscale transform
-    This will return an image with only one color channel
-    but NOTE: to see the returned image as grayscale
-    you should call plt.imshow(gray, cmap='gray')"""
-    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-
-
-def canny(img, low_threshold, high_threshold):
-    """Applies the Canny transform"""
-    return cv2.Canny(img, low_threshold, high_threshold)
-
-
-def gaussian_blur(img, kernel_size):
-    """Applies a Gaussian Noise kernel"""
-    return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
-
-
-def region_of_interest(img, vertices):
-    """
-    Applies an image mask.
-
-    Only keeps the region of the image defined by the polygon
-    formed from `vertices`. The rest of the image is set to black.
-    """
-    # defining a blank mask to start with
-    mask = np.zeros_like(img)
-
-    # defining a 3 channel or 1 channel color to fill the mask with depending on the input image
-    if len(img.shape) > 2:
-        channel_count = img.shape[2]  # i.e. 3 or 4 depending on your image
-        ignore_mask_color = (255,) * channel_count
+    # load tflite model if flag is set
+    if FLAGS.framework == 'tflite':
+        interpreter = tf.lite.Interpreter(model_path=FLAGS.weights)
+        interpreter.allocate_tensors()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        print(input_details)
+        print(output_details)
+    # otherwise load standard tensorflow saved model
     else:
-        ignore_mask_color = 255
+        saved_model_loaded = tf.saved_model.load(FLAGS.weights, tags=[tag_constants.SERVING])
+        infer = saved_model_loaded.signatures['serving_default']
 
-    # filling pixels inside the polygon defined by "vertices" with the fill color
-    cv2.fillPoly(mask, vertices, ignore_mask_color)
+    # begin video capture
+    try:
+        vid = cv2.VideoCapture(int(video_path))
+    except:
+        vid = cv2.VideoCapture(video_path)
 
-    # returning the image only where mask pixels are nonzero
-    masked_image = cv2.bitwise_and(img, mask)
-    return masked_image
+    out = None
 
+    # get video ready to save locally if flag is set
+    if FLAGS.output:
+        # by default VideoCapture returns float instead of int
+        width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = int(vid.get(cv2.CAP_PROP_FPS))
+        codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
+        out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
-def draw_lines(img, lines, color=[255, 0, 0], thickness=2):
-    """
-    NOTE: this is the function you might want to use as a starting point once you want to
-    average/extrapolate the line segments you detect to map out the full
-    extent of the lane (going from the result shown in raw-lines-example.mp4
-    to that shown in P1_example.mp4).
-
-    Think about things like separating line segments by their
-    slope ((y2-y1)/(x2-x1)) to decide which segments are part of the left
-    line vs. the right line.  Then, you can average the position of each of
-    the lines and extrapolate to the top and bottom of the lane.
-
-    This function draws `lines` with `color` and `thickness`.
-    Lines are drawn on the image inplace (mutates the image).
-    If you want to make the lines semi-transparent, think about combining
-    this function with the weighted_img() function below
-    """
-    for line in lines:
-        for x1, y1, x2, y2 in line:
-            cv2.line(img, (x1, y1), (x2, y2), color, thickness)
-
-
-def draw_circle(img, lines, color=[0, 0, 255]):
-    for line in lines:
-        cv2.circle(img, (line[0], line[1]), 2, color, -1)
-
-
-def hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
-    """
-    `img` should be the output of a Canny transform.
-    Returns an image with hough lines drawn.
-    """
-    lines = cv2.HoughLinesP(img, rho, theta, threshold, np.array([]), minLineLength=min_line_len,
-                            maxLineGap=max_line_gap)
-    line_arr = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
-    draw_lines(line_arr, lines)
-    return lines
-
-
-def weighted_img(img, initial_img, α=0.8, β=1., λ=0.):
-    """
-    `img` is the output of the hough_lines(), An image with lines drawn on it.
-    Should be a blank image (all black) with lines drawn on it.
-
-    `initial_img` should be the image before any processing.
-
-    The result image is computed as follows:
-
-    initial_img * α + img * β + λ
-    NOTE: initial_img and img must be the same shape!
-    """
-    return cv2.addWeighted(initial_img, α, img, β, λ)
-
-
-def Collect_points(lines):
-    # reshape [:4] to [:2]
-    interp = lines.reshape(lines.shape[0] * 2, 2)
-    # interpolation & collecting points for RANSAC
-    for line in lines:
-        if np.abs(line[3] - line[1]) > 5:
-            tmp = np.abs(line[3] - line[1])
-            a = line[0]
-            b = line[1]
-            c = line[2]
-            d = line[3]
-            slope = (c - a) / (d - b)
-            for m in range(0, tmp, 5):
-                if slope > 0:
-                    new_point = np.array([[int(a + m * slope), int(b + m)]])
-                    interp = np.concatenate((interp, new_point), axis=0)
-                elif slope < 0:
-                    new_point = np.array([[int(a - m * slope), int(b - m)]])
-                    interp = np.concatenate((interp, new_point), axis=0)
-    return interp
-
-
-def get_random_samples(lines):
-    one = random.choice(lines)
-    two = random.choice(lines)
-    if two[0] == one[0]:  # extract again if values are overlapped
-        while two[0] == one[0]:
-            two = random.choice(lines)
-    one, two = one.reshape(1, 2), two.reshape(1, 2)
-    three = np.concatenate((one, two), axis=1)
-    three = three.squeeze()
-    return three
-
-
-def compute_model_parameter(line):
-    # y = mx+n
-    m = (line[3] - line[1]) / (line[2] - line[0])
-    n = line[1] - m * line[0]
-    # ax+by+c = 0
-    a, b, c = m, -1, n
-    par = np.array([a, b, c])
-    return par
-
-
-def compute_distance(par, point):
-    # distance between line & point
-
-    return np.abs(par[0] * point[:, 0] + par[1] * point[:, 1] + par[2]) / np.sqrt(par[0] ** 2 + par[1] ** 2)
-
-
-def model_verification(par, lines):
-    # calculate distance
-    distance = compute_distance(par, lines)
-    # total sum of distance between random line and sample points
-    sum_dist = distance.sum(axis=0)
-    # average
-    avg_dist = sum_dist / len(lines)
-
-    return avg_dist
-
-
-def draw_extrapolate_line(img, par, color=(0, 0, 255), thickness=2):
-    x1, y1 = int(-par[1] / par[0] * img.shape[0] - par[2] / par[0]), int(img.shape[0])
-    x2, y2 = int(-par[1] / par[0] * (img.shape[0] / 2 + 100) - par[2] / par[0]), int(img.shape[0] / 2 + 100)
-    cv2.line(img, (x1, y1), (x2, y2), color, thickness)
-    return img
-
-
-def get_fitline(img, f_lines):
-    rows, cols = img.shape[:2]
-    output = cv2.fitLine(f_lines, cv2.DIST_L2, 0, 0.01, 0.01)
-    vx, vy, x, y = output[0], output[1], output[2], output[3]
-    x1, y1 = int(((img.shape[0] - 1) - y) / vy * vx + x), img.shape[0] - 1
-    x2, y2 = int(((img.shape[0] / 2 - 300) - y) / vy * vx + x), int(img.shape[0] / 2 - 330)
-    result = [x1, y1, x2, y2]
-
-    return result
-
-
-def draw_fitline(img, result_l, result_r, color=(255, 0, 255), thickness=10):
-    # draw fitting line
-    lane = np.zeros_like(img)
-    cv2.line(lane, (int(result_l[0]), int(result_l[1])), (int(result_l[2]), int(result_l[3])), color, thickness)
-    cv2.line(lane, (int(result_r[0]), int(result_r[1])), (int(result_r[2]), int(result_r[3])), color, thickness)
-    # add original image & extracted lane lines
-    final = weighted_img(lane, img, 1, 0.5)
-    return final
-
-
-def erase_outliers(par, lines):
-    # distance between best line and sample points
-    distance = compute_distance(par, lines)
-
-    # filtered_dist = distance[distance<15]
-    filtered_lines = lines[distance < 13, :]
-    return filtered_lines
-
-
-def smoothing(lines, pre_frame):
-    # collect frames & print average line
-    lines = np.squeeze(lines)
-    avg_line = np.array([0, 0, 0, 0])
-
-    for ii, line in enumerate(reversed(lines)):
-        if ii == pre_frame:
+    frame_num = 0
+    ct_num = [0, 0, 0] # 0: car 1: bus 2: truck
+    ct_all = 0
+    track_id = []
+    tl = [] # left line에서의 위치 좌:0, 우:1
+    tr = [] # right line에서의 위치 좌:0, 우:1
+    cr_id = []
+    cr_fr = []
+    cr_fps = int(vid.get(cv2.CAP_PROP_FPS))
+    # while video is running
+    while True:
+        return_value, frame = vid.read()
+        if return_value:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(frame)
+        else:
+            print('Video has ended or failed, try a different video format!')
             break
-        avg_line += line
-    avg_line = avg_line / pre_frame
+        frame_num +=1
+        print('Frame #: ', frame_num)
+        frame_size = frame.shape[:2]
+        image_data = cv2.resize(frame, (input_size, input_size))
+        image_data = image_data / 255.
+        image_data = image_data[np.newaxis, ...].astype(np.float32)
+        start_time = time.time()
 
-    return avg_line
-
-
-def ransac_line_fitting(img, lines, min=100):
-    global fit_result, l_fit_result, r_fit_result
-    best_line = np.array([0, 0, 0])
-    if len(lines) != 0:
-        for i in range(30):
-            sample = get_random_samples(lines)
-            parameter = compute_model_parameter(sample)
-            cost = model_verification(parameter, lines)
-            if cost < min:  # update best_line
-                min = cost
-                best_line = parameter
-            if min < 3: break
-        # erase outliers based on best line
-        filtered_lines = erase_outliers(best_line, lines)
-        fit_result = get_fitline(img, filtered_lines)
-    else:
-        if fit_result[2] - fit_result[0] == 0:
-            fitx = fit_result[2] - fit_result[0] + 1e-4
+        # run detections on tflite if flag is set
+        if FLAGS.framework == 'tflite':
+            interpreter.set_tensor(input_details[0]['index'], image_data)
+            interpreter.invoke()
+            pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
+            # run detections using yolov3 if flag is set
+            if FLAGS.model == 'yolov3' and FLAGS.tiny == True:
+                boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25,
+                                                input_shape=tf.constant([input_size, input_size]))
+            else:
+                boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25,
+                                                input_shape=tf.constant([input_size, input_size]))
         else:
-            fitx = fit_result[2] - fit_result[0]
-        if (fit_result[3] - fit_result[1]) / fitx < 0:
-            l_fit_result = fit_result
-            return l_fit_result
-        else:
-            r_fit_result = fit_result
-            return r_fit_result
+            batch_data = tf.constant(image_data)
+            pred_bbox = infer(batch_data)
+            for key, value in pred_bbox.items():
+                boxes = value[:, :, 0:4]
+                pred_conf = value[:, :, 4:]
+
+        boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
+            boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
+            scores=tf.reshape(
+                pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
+            max_output_size_per_class=50,
+            max_total_size=50,
+            iou_threshold=FLAGS.iou,
+            score_threshold=FLAGS.score
+        )
+
+        # convert data to numpy arrays and slice out unused elements
+        num_objects = valid_detections.numpy()[0]
+        bboxes = boxes.numpy()[0]
+        bboxes = bboxes[0:int(num_objects)]
+        scores = scores.numpy()[0]
+        scores = scores[0:int(num_objects)]
+        classes = classes.numpy()[0]
+        classes = classes[0:int(num_objects)]
+
+        # format bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
+        original_h, original_w, _ = frame.shape
+        bboxes = utils.format_boxes(bboxes, original_h, original_w)
+
+        # store all predictions in one parameter for simplicity when calling functions
+        pred_bbox = [bboxes, scores, classes, num_objects]
+
+        # read in all class names from config
+        class_names = utils.read_class_names(cfg.YOLO.CLASSES)
+
+        # by default allow all classes in .names file
+        # allowed_classes = list(class_names.values())
         
-    if fit_result[2] - fit_result[0] == 0:
-        fitx = fit_result[2] - fit_result[0] + 1e-4
-    else:
-        fitx = fit_result[2] - fit_result[0]
-    if (fit_result[3] - fit_result[1]) / fitx < 0:
-        l_fit_result = fit_result
-        return l_fit_result
-    else:
-        r_fit_result = fit_result
-        return r_fit_result
+        # custom allowed classes (uncomment line below to customize tracker for only people)
+        #allowed_classes = ['person']
+        allowed_classes = ['car', 'bus', 'truck']
 
+        # loop through objects and use class index to get class name, allow only classes in allowed_classes list
+        names = []
+        deleted_indx = []
+        for i in range(num_objects):
+            class_indx = int(classes[i])
+            class_name = class_names[class_indx]
+            if class_name not in allowed_classes:
+                deleted_indx.append(i)
+            else:
+                names.append(class_name)
 
-def detect_lanes_img(img):
-    height, width = img.shape[:2]
-
-    # Convert to grayimage
-    # g_img = grayscale(img)
-
-    # Apply gaussian filter
-    blur_img = gaussian_blur(img, 3)
-
-    # Apply Canny edge transform
-    canny_img = canny(blur_img, 70, 100)
-    # cv2.imshow('canny_img1', canny_img)
-    # to except contours of ROI image
-    vertices = np.array(
-        [[(width / 2 - 230, height), (width / 2 - 180, 150), (width / 2, 150), (width / 2 + 150, height)]],
-        dtype=np.int32)
-    canny_img = region_of_interest(canny_img, vertices)
-    
-    # cv2.imshow('canny_img2', canny_img)
-
-    # Perform hough transform
-    # Get first candidates for real lane lines
-    line_arr = hough_lines(canny_img, 1, 1 * np.pi / 180, 100, 10, 20)
-
-    # if can't find any lines
-    if line_arr is None:
-        return img
-    # draw_lines(img, line_arr, thickness=2)
-
-    line_arr = np.squeeze(line_arr)
-    # Get slope degree to separate 2 group (+ slope , - slope)
-    slope_degree = (np.arctan2(line_arr[:, 1] - line_arr[:, 3], line_arr[:, 0] - line_arr[:, 2]) * 180) / np.pi
-
-    # ignore horizontal slope lines
-    line_arr = line_arr[np.abs(slope_degree) < 160]
-    slope_degree = slope_degree[np.abs(slope_degree) < 160]
-    # ignore vertical slope lines
-    line_arr = line_arr[np.abs(slope_degree) > 91]
-    slope_degree = slope_degree[np.abs(slope_degree) > 91]
-    L_lines, R_lines = line_arr[(slope_degree > 0), :], line_arr[(slope_degree < 0), :]
-    # print(line_arr.shape,'  ',L_lines.shape,'  ',R_lines.shape)
-
-    # if can't find any lines
-    if L_lines is None and R_lines is None:
-        return img
-
-    # interpolation & collecting points for RANSAC
-    L_interp = Collect_points(L_lines)
-    R_interp = Collect_points(R_lines)
-
-    # draw_circle(img,L_interp,(255,255,0))
-    # draw_circle(img,R_interp,(0,255,255))
-
-    # erase outliers based on best line
-    left_fit_line = ransac_line_fitting(img, L_interp)
-    right_fit_line = ransac_line_fitting(img, R_interp)
-    
-    # print("left fit line: ", left_fit_line)
-    # print("right fit line: ", right_fit_line)
-
-    # smoothing by using previous frames
-    L_lane.append(left_fit_line), R_lane.append(right_fit_line)
-
-    if len(L_lane) > 10:
-        left_fit_line = smoothing(L_lane, 10)
-    if len(R_lane) > 10:
-        right_fit_line = smoothing(R_lane, 10)
-    # final = draw_fitline(img, left_fit_line, right_fit_line)
-    
-    # print("left fit line: ", left_fit_line)
-    # print("right fit line: ", right_fit_line)
-    return left_fit_line, right_fit_line
-
-# if __name__ == '__main__':
-#     if input_type == 'image':
-#         # frame = cv2.imread('solidYellowCurve.jpg')
-#         frame = cv2.imread('test.jpg')
-#         # if frame.shape[0] != 540:  # resizing for challenge video
-#         #     frame = cv2.resize(frameqqq, None, fx=3 / 4, fy=3 / 4, interpolation=cv2.INTER_AREA)
-#         result = detect_lanes_img(frame)
-
-#         cv2.imshow('result', result)
-#         cv2.waitKey(0)
-
-#     elif input_type == 'video':
-#         while (cap.isOpened()):
-#             ret, frame = cap.read()
-
-#             result = detect_lanes_img(frame)
-
-#             cv2.imshow('result', result)
-
-#             # out.write(frame)
-
-#             if cv2.waitKey(1) & 0xFF == ord('q'):
-#                 break
-
-#         cap.release()
-#         cv2.destroyAllWindows()
+        names = np.array(names)
+        count = len(names)
         
+        # delete detections that are not in allowed_classes
+        bboxes = np.delete(bboxes, deleted_indx, axis=0)
+        scores = np.delete(scores, deleted_indx, axis=0)
+
+        # encode yolo detections and feed to tracker
+        features = encoder(frame, bboxes)
+        detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
+
+        #initialize color map
+        cmap = plt.get_cmap('tab20b')
+        colors = [cmap(i)[:3] for i in np.linspace(0, 1, 20)]
+
+        # run non-maxima supression
+        boxs = np.array([d.tlwh for d in detections])
+        scores = np.array([d.confidence for d in detections])
+        classes = np.array([d.class_name for d in detections])
+        indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
+        detections = [detections[i] for i in indices]       
+
+        # draw lanes
+        if FLAGS.lane:
+            lline, rline = lt.detect_lanes_img(frame)
+            frame = lt.draw_fitline(frame, lline, rline)
+                
+            if lline[0]-lline[2]==0:
+                lx=lline[0]-lline[2]+1e-4
+            else:
+                lx=lline[0]-lline[2]
+                
+            if rline[0]-rline[2]==0:
+                rx=rline[0]-rline[2]+1e-4
+            else:
+                rx=rline[0]-rline[2]
+            lm=(lline[1]-lline[3])/lx
+            rm=(rline[1]-rline[3])/rx
+            
+        # Call the tracker
+        tracker.predict()
+        tracker.update(detections)
+
+        # update tracks
+        for track in tracker.tracks:
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue 
+            bbox = track.to_tlbr()
+            class_name = track.get_class()
+            
+        # check count
+            if track.track_id not in track_id:
+                if class_name == 'car':
+                    ct_num[0] = ct_num[0] + 1
+                elif class_name == 'bus':
+                    ct_num[1] = ct_num[1] + 1
+                elif class_name == 'truck':
+                    ct_num[2] = ct_num[2] + 1
+                track_id.append(track.track_id)
+                if FLAGS.lane:
+                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    ly=lm*(x0-lline[0])+lline[1]
+                    ry=rm*(x0-rline[0])+rline[1]
+                    if y0<ly:
+                        tl.append(1)
+                    else:
+                        tl.append(0)
+                    if y0<ry:
+                        tr.append(0)
+                    else:
+                        tr.append(1)
+            else:
+                if FLAGS.lane:
+                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    ly=lm*(x0-lline[0])+lline[1]
+                    ry=rm*(x0-rline[0])+rline[1]
+                    idx = track_id.index(track.track_id)
+                    if y0<ly:
+                        if tl[idx]==0:
+                            tl[idx]=1
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    else:
+                        if tl[idx]==1:
+                            tl[idx]=0
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    if y0<ry:
+                        if tr[idx]==1:
+                            tr[idx]=0
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    else:
+                        if tr[idx]==0:
+                            tr[idx]=1
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+            
+        # draw bbox on screen
+            color = colors[int(track.track_id) % len(colors)]
+            color = [i * 255 for i in color]
+            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
+            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
+            cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
+
+        # if enable info flag then print details about each track
+            if FLAGS.info:
+                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
+        
+        # show traffic on screen
+        ct_all = len(track_id)
+        overlay = frame.copy()
+        # text backbround
+        cv2.rectangle(overlay, (0, 0), (500, 50), (0,0,0), -1)
+        cv2.rectangle(overlay, (1000, 0), (original_w, 50), (0,0,0), -1)
+        
+        if FLAGS.count:
+            cv2.putText(overlay, "Overall traffic: {}".format(ct_all), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            cv2.putText(overlay, "Car #: {0:02d}, Bus #: {1:02d}, Truck #: {2:02d}".format(ct_num[0],ct_num[1],ct_num[2]), (1050, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 255, 0), 2)
+            # apply the overlay
+            alpha = 0.7
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+            print("Objects being tracked: {}, Overall traffic: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,ct_all,ct_num[0],ct_num[1],ct_num[2]))
+        
+        # check lane crossing
+        if FLAGS.lane:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (1000, 50), (original_w, 100), (0,0,0), -1)
+            for i, tid in enumerate(cr_id):
+                if frame_num-cr_fr[i]>cr_fps:
+                    del cr_id[i]
+                    del cr_fr[i]
+            cr_num=len(cr_id)
+            if cr_num > 0:
+                cv2.putText(overlay, "Lane crossing occurring!", (1150, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (255, 0, 0), 2)
+            else:
+                cv2.putText(overlay, "Lane crossing not occurred", (1050, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 0, 255), 2)
+            # apply the overlay
+            alpha = 0.7
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+        # calculate frames per second of running detections
+        fps = 1.0 / (time.time() - start_time)
+        print("FPS: %.2f" % fps)
+        result = np.asarray(frame)
+        result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        
+        if not FLAGS.dont_show:
+            cv2.imshow("Output Video", result)
+        
+        # if output flag is set, save video file
+        if FLAGS.output:
+            out.write(result)
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    try:
+        app.run(main)
+    except SystemExit:
+        pass
