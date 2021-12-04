@@ -96,6 +96,11 @@ def main(_argv):
     ct_num = [0, 0, 0] # 0: car 1: bus 2: truck
     ct_all = 0
     track_id = []
+    tl = [] # left line에서의 위치 좌:0, 우:1
+    tr = [] # right line에서의 위치 좌:0, 우:1
+    cr_id = []
+    cr_fr = []
+    cr_fps = int(vid.get(cv2.CAP_PROP_FPS))
     # while video is running
     while True:
         return_value, frame = vid.read()
@@ -205,7 +210,19 @@ def main(_argv):
         if FLAGS.lane:
             lline, rline = lt.detect_lanes_img(frame)
             frame = lt.draw_fitline(frame, lline, rline)
-        
+                
+            if lline[0]-lline[2]==0:
+                lx=lline[0]-lline[2]+1e-4
+            else:
+                lx=lline[0]-lline[2]
+                
+            if rline[0]-rline[2]==0:
+                rx=rline[0]-rline[2]+1e-4
+            else:
+                rx=rline[0]-rline[2]
+            lm=(lline[1]-lline[3])/lx
+            rm=(rline[1]-rline[3])/rx
+            
         # Call the tracker
         tracker.predict()
         tracker.update(detections)
@@ -226,6 +243,56 @@ def main(_argv):
                 elif class_name == 'truck':
                     ct_num[2] = ct_num[2] + 1
                 track_id.append(track.track_id)
+                if FLAGS.lane:
+                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    ly=lm*(x0-lline[0])+lline[1]
+                    ry=rm*(x0-rline[0])+rline[1]
+                    if y0<ly:
+                        tl.append(1)
+                    else:
+                        tl.append(0)
+                    if y0<ry:
+                        tr.append(0)
+                    else:
+                        tr.append(1)
+            else:
+                if FLAGS.lane:
+                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    ly=lm*(x0-lline[0])+lline[1]
+                    ry=rm*(x0-rline[0])+rline[1]
+                    idx = track_id.index(track.track_id)
+                    if y0<ly:
+                        if tl[idx]==0:
+                            tl[idx]=1
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    else:
+                        if tl[idx]==1:
+                            tl[idx]=0
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    if y0<ry:
+                        if tr[idx]==1:
+                            tr[idx]=0
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
+                    else:
+                        if tr[idx]==0:
+                            tr[idx]=1
+                            if track.track_id not in cr_id:
+                                cr_id.append(track.track_id)
+                                cr_fr.append(frame_num)
+                            else:
+                                cr_fr[cr_id.index(track.track_id)]=frame_num
             
         # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
@@ -253,6 +320,23 @@ def main(_argv):
             cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
             print("Objects being tracked: {}, Overall traffic: {}, Car #: {}, Bus #: {}, Truck #: {}".format(count,ct_all,ct_num[0],ct_num[1],ct_num[2]))
         
+        # check lane crossing
+        if FLAGS.lane:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (1000, 50), (original_w, 100), (0,0,0), -1)
+            for i, tid in enumerate(cr_id):
+                if frame_num-cr_fr[i]>cr_fps:
+                    del cr_id[i]
+                    del cr_fr[i]
+            cr_num=len(cr_id)
+            if cr_num > 0:
+                cv2.putText(overlay, "Lane crossing occurring!", (1150, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (255, 0, 0), 2)
+            else:
+                cv2.putText(overlay, "Lane crossing not occurred", (1050, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 0, 255), 2)
+            # apply the overlay
+            alpha = 0.7
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
         print("FPS: %.2f" % fps)
