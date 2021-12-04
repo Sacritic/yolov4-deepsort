@@ -336,11 +336,11 @@ def detect_lanes_img(img):
         left_fit_line = smoothing(L_lane, 10)
     if len(R_lane) > 10:
         right_fit_line = smoothing(R_lane, 10)
-    final = draw_fitline(img, left_fit_line, right_fit_line)
+    # final = draw_fitline(img, left_fit_line, right_fit_line)
     
     # print("left fit line: ", left_fit_line)
     # print("right fit line: ", right_fit_line)
-    return final
+    return left_fit_line, right_fit_line
 
 # if __name__ == '__main__':
 #     if input_type == 'image':
