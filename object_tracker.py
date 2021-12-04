@@ -207,7 +207,7 @@ def main(_argv):
         detections = [detections[i] for i in indices]       
 
         # draw lanes
-        if FLAGS.lane:
+        if FLAGS.lane and frame_num < 5:
             lline, rline = lt.detect_lanes_img(frame)
             frame = lt.draw_fitline(frame, lline, rline)
                 
