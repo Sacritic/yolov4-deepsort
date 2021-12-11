@@ -243,7 +243,7 @@ def main(_argv):
                     ct_num[2] = ct_num[2] + 1
                 track_id.append(track.track_id)
                 if FLAGS.lane:
-                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    x0,y0=bbox[0]+bbox[2]/2, bbox[1]+bbox[3]/2
                     ly=lm*(x0-lline[0])+lline[1]
                     ry=rm*(x0-rline[0])+rline[1]
                     if y0<ly:
@@ -256,7 +256,7 @@ def main(_argv):
                         tr.append(1)
             else:
                 if FLAGS.lane:
-                    x0,y0=np.abs(bbox[0]+bbox[2])/2, np.abs(bbox[1]+bbox[3])/2
+                    x0,y0=bbox[0]+bbox[2]/2, bbox[1]+bbox[3]/2
                     ly=lm*(x0-lline[0])+lline[1]
                     ry=rm*(x0-rline[0])+rline[1]
                     idx = track_id.index(track.track_id)
