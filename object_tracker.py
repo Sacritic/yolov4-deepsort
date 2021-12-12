@@ -331,7 +331,7 @@ def main(_argv):
             if cr_num > 0:
                 cv2.putText(overlay, "Lane crossing occurring!", (1150, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (255, 0, 0), 2)
             else:
-                cv2.putText(overlay, "Lane crossing not occurred", (1150, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 0, 255), 2)
+                cv2.putText(overlay, "Lane crossing not occurred", (1100, 85), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 0, 255), 2)
             # apply the overlay
             alpha = 0.7
             cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
